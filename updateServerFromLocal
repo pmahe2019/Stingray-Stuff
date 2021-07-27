@@ -1,0 +1,70 @@
+#!/bin/bash
+
+if [[ ($# -lt 2 || $# -gt 3) ]]; then
+  echo "> This script needs 2 or 3 parameters to run"
+  echo "> Usage: [OPTIONS] [BRANCH] [SERVER]"
+  echo "> Options: -d    include a fresh database"
+  exit
+fi
+
+while getopts d opt; do
+  case "$opt" in
+    d) database=1 ;;
+    *) exit 1;;
+  esac
+done
+
+shift "$((OPTIND - 1))"
+
+dbPwd=rikkuX2!
+branchName=$1
+serverIp=$2
+
+echo "> Deploy $branchName to $serverIp"
+
+ssh -o ServerAliveInterval=5 -o ServerAliveCountMax=1 root@"${serverIp}" << EOF
+
+if [[ "$database" == 1 ]]; then
+  echo "> ! WARNING ! This process takes approx 30 mins !"
+  echo ">     Start time: $(date +'%T')"
+
+  echo "> Getting latest database..."
+  scp root@65.151.148.49:/opt/mysql/scrubbed_incoming/stingray_scrubbed.gz.crypt /opt/mysql/stingray_scrubbed.gz.crypt
+
+  echo "> Decrypting database..."
+  openssl aes-256-cbc -d -pass "pass:DMgUnHY9PB$8u#B8LzfJ8^vl1VDLvSTWGDt&" -in /opt/mysql/stingray_scrubbed.gz.crypt > /opt/mysql/stingray_scrubbed.sql.gz
+
+  echo "> Unzipping database into mysql..."
+  gunzip -c /opt/mysql/stingray_scrubbed.sql.gz | mysql -u root -p$dbPwd stingray --port=35523
+fi
+
+echo "> Logging in as stingray user..."
+sudo command su --login stingray --shell /bin/bash
+
+echo "> Changing to stingray directory..."
+cd /opt/src/stingray || exit
+pwd
+
+echo "> git fetch..."
+git fetch
+
+echo "> git checkout to ${branchName}..."
+git checkout "${branchName}"
+
+echo ">git pull..."
+git pull
+
+echo "> Running sql..."
+shopt -s nullglob
+for sqlFile in src/release/sql/*.sql; do
+  mysql -u root -p$dbPwd stingray < "\${sqlFile}"
+done
+
+echo "> Running release script..."
+src/release/scripts/development.sh -y
+
+echo "> Running deploy script..."
+chmod +x ./deploy
+./deploy
+
+EOF
